@@ -19,7 +19,6 @@ package org.apache.seata.spring.boot.autoconfigure;
 import org.apache.seata.config.Configuration;
 import org.apache.seata.config.ConfigurationFactory;
 import org.apache.seata.config.FileConfiguration;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,13 +40,10 @@ public class SeataCoreAutoConfigurationTest {
     @Autowired
     private Environment environment;
 
-    @BeforeAll
-    public static void init() {
-        ConfigurationFactory.reload();
-    }
-
     @Test
     public void testSeataPropertiesLoaded() {
+        ConfigurationFactory.reload();
+
         // default file.conf
         String dbUrl = environment.getProperty("seata.store.db.url");
         assertEquals("jdbc:mysql://127.0.0.1:3306/seata?rewriteBatchedStatements=true", dbUrl, "The DB URL should be correctly loaded from configuration");
