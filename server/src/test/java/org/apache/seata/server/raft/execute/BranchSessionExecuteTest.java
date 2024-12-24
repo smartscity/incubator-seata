@@ -62,7 +62,6 @@ class BranchSessionExecuteTest {
         SessionHolder.init(SessionMode.RAFT);
         LockerManagerFactory.destroy();
         LockerManagerFactory.init(LockMode.RAFT);
-        LockerManagerFactory.init(LockMode.RAFT);
         GLOBAL_SESSION = mockGlobalSession();
         SessionHolder.getRootSessionManager().addGlobalSession(GLOBAL_SESSION);
     }
