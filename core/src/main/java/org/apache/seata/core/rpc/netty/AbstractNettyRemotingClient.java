@@ -20,6 +20,7 @@ import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -36,6 +37,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.EventExecutorGroup;
 import org.apache.seata.common.exception.FrameworkErrorCode;
 import org.apache.seata.common.exception.FrameworkException;
@@ -90,6 +92,10 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
     protected final Map<Integer, MergeMessage> mergeMsgMap = new ConcurrentHashMap<>();
 
     protected final Map<Integer, Integer> childToParentMap = new ConcurrentHashMap<>();
+
+    // 辅助映射：Channel -> Set<msgId>
+    protected final ConcurrentHashMap<Channel, Set<Integer>> channelToRequestIds = new ConcurrentHashMap<>();
+
 
     /**
      * When batch sending is enabled, the message will be stored to basketMap
@@ -181,6 +187,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
             }
         } else {
             Channel channel = clientChannelManager.acquireChannel(serverAddress);
+            channelToRequestIds.computeIfAbsent(channel, ch -> ConcurrentHashMap.newKeySet()).add(rpcMessage.getId());
             return super.sendSync(channel, rpcMessage, timeoutMillis);
         }
 
@@ -193,6 +200,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
             return null;
         }
         RpcMessage rpcMessage = buildRequestMessage(msg, ProtocolConstants.MSGTYPE_RESQUEST_SYNC);
+        channelToRequestIds.computeIfAbsent(channel, ch -> ConcurrentHashMap.newKeySet()).add(rpcMessage.getId());
         return super.sendSync(channel, rpcMessage, this.getRpcRequestTimeout());
     }
 
@@ -214,6 +222,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
                     childToParentMap.put(msgId, parentId);
                 }
             }
+            channelToRequestIds.computeIfAbsent(channel, ch -> ConcurrentHashMap.newKeySet()).add(rpcMessage.getId());
         }
         super.sendAsync(channel, rpcMessage);
     }
@@ -222,6 +231,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
     public void sendAsyncResponse(String serverAddress, RpcMessage rpcMessage, Object msg) {
         RpcMessage rpcMsg = buildResponseMessage(rpcMessage, msg, ProtocolConstants.MSGTYPE_RESPONSE);
         Channel channel = clientChannelManager.acquireChannel(serverAddress);
+        channelToRequestIds.computeIfAbsent(channel, ch -> ConcurrentHashMap.newKeySet()).add(rpcMessage.getId());
         super.sendAsync(channel, rpcMsg);
     }
 
@@ -423,7 +433,9 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
         @Override
         public void channelRead(final ChannelHandlerContext ctx, Object msg) throws Exception {
             if (msg instanceof RpcMessage) {
-                processMessage(ctx, (RpcMessage)msg);
+                RpcMessage rpcMessage = (RpcMessage)msg;
+                processMessage(ctx, rpcMessage);
+                removeRequestIdFromChannel(ctx.channel(), rpcMessage.getId());
             } else {
                 LOGGER.error("rpcMessage type error");
             }
@@ -448,6 +460,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
                 LOGGER.info("channel inactive: {}", ctx.channel());
             }
             clientChannelManager.releaseChannel(ctx.channel(), NetUtil.toStringAddress(ctx.channel().remoteAddress()));
+            failFuturesForChannel(ctx.channel(), new FrameworkException("Channel inactive"));
             super.channelInactive(ctx);
         }
 
@@ -489,6 +502,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
             if (LOGGER.isInfoEnabled()) {
                 LOGGER.info("remove exception rm channel:{}", ctx.channel());
             }
+            failFuturesForChannel(ctx.channel(), cause);
             super.exceptionCaught(ctx, cause);
         }
 
@@ -501,4 +515,61 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
         }
     }
 
+    /**
+     * 遍历 futures 并标记与指定 Channel 关联的所有 MessageFuture 为失败
+     *
+     * @param channel 发生断开或异常的 Channel
+     * @param cause   失败原因
+     */
+    private void failFuturesForChannel(Channel channel, Throwable cause) {
+        Set<Integer> requestIds = channelToRequestIds.remove(channel);
+        if (requestIds != null) {
+            for (Integer requestId : requestIds) {
+                MessageFuture future = futures.remove(requestId);
+                if (future != null) {
+                    future.setResultMessage(cause);
+                }
+            }
+        }
+    }
+
+    /**
+     * 从 channelToRequestIds 映射中移除指定 Channel 和 requestId 的关联关系。
+     * 如果该 Channel 不再关联任何 requestId，则从映射中移除该 Channel。
+     *
+     * @param channel   发生断开或异常的 Channel
+     * @param requestId 要移除的 requestId
+     */
+    private void removeRequestIdFromChannel(Channel channel, Integer requestId) {
+        // 参数 null 检查
+        if (channel == null) {
+            if (requestId != null) {
+                LOGGER.warn("Attempted to remove requestId {} from a null channel.", requestId);
+            } else {
+                LOGGER.warn("Attempted to remove a null requestId from a null channel.");
+            }
+            return;
+        }
+
+        if (requestId == null) {
+            LOGGER.warn("Attempted to remove a null requestId from channel {}.", channel);
+            return;
+        }
+
+        // 使用 computeIfPresent 确保操作的原子性
+        channelToRequestIds.computeIfPresent(channel, (ch, requestIds) -> {
+            boolean removed = requestIds.remove(requestId);
+            if (removed) {
+                LOGGER.debug("Removed requestId {} from channel {}.", requestId, ch);
+            } else {
+                LOGGER.warn("Attempted to remove non-existing requestId {} from channel {}.", requestId, ch);
+            }
+
+            if (requestIds.isEmpty()) {
+                LOGGER.debug("No more requestIds associated with channel {}. Channel removed from mapping.", ch);
+                return null; // 返回 null 表示移除该 Channel 的映射
+            }
+            return requestIds;
+        });
+    }
 }
