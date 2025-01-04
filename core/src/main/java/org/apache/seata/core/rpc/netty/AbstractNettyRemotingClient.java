@@ -458,7 +458,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
                 LOGGER.info("channel inactive: {}", ctx.channel());
             }
             clientChannelManager.releaseChannel(ctx.channel(), NetUtil.toStringAddress(ctx.channel().remoteAddress()));
-            failFuturesForChannel(ctx.channel(), new FrameworkException("Channel inactive"));
+            failFuturesForChannel(ctx.channel(), new FrameworkException(FrameworkErrorCode.ChannelIsNotWritable));
             super.channelInactive(ctx);
         }
 
