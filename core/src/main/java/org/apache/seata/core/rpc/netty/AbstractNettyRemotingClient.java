@@ -37,7 +37,6 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
-import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.EventExecutorGroup;
 import org.apache.seata.common.exception.FrameworkErrorCode;
 import org.apache.seata.common.exception.FrameworkException;
@@ -93,9 +92,8 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
 
     protected final Map<Integer, Integer> childToParentMap = new ConcurrentHashMap<>();
 
-    // 辅助映射：Channel -> Set<msgId>
+    // Channel -> Set<msgId>
     protected final ConcurrentHashMap<Channel, Set<Integer>> channelToRequestIds = new ConcurrentHashMap<>();
-
 
     /**
      * When batch sending is enabled, the message will be stored to basketMap
@@ -516,10 +514,10 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
     }
 
     /**
-     * 遍历 futures 并标记与指定 Channel 关联的所有 MessageFuture 为失败
+     * Iterates over futures and marks all MessageFutures associated with the specified Channel as failed.
      *
-     * @param channel 发生断开或异常的 Channel
-     * @param cause   失败原因
+     * @param channel The Channel that has been disconnected or encountered an exception.
+     * @param cause   The reason for the failure.
      */
     private void failFuturesForChannel(Channel channel, Throwable cause) {
         Set<Integer> requestIds = channelToRequestIds.remove(channel);
@@ -534,14 +532,13 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
     }
 
     /**
-     * 从 channelToRequestIds 映射中移除指定 Channel 和 requestId 的关联关系。
-     * 如果该 Channel 不再关联任何 requestId，则从映射中移除该 Channel。
+     * Removes the association between the specified Channel and requestId from the channelToRequestIds mapping.
+     * If the Channel no longer has any associated requestId, the Channel will be removed from the mapping.
      *
-     * @param channel   发生断开或异常的 Channel
-     * @param requestId 要移除的 requestId
+     * @param channel   The Channel that has been disconnected or encountered an exception.
+     * @param requestId The requestId to be removed.
      */
     private void removeRequestIdFromChannel(Channel channel, Integer requestId) {
-        // 参数 null 检查
         if (channel == null) {
             if (requestId != null) {
                 LOGGER.warn("Attempted to remove requestId {} from a null channel.", requestId);
@@ -556,7 +553,6 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
             return;
         }
 
-        // 使用 computeIfPresent 确保操作的原子性
         channelToRequestIds.computeIfPresent(channel, (ch, requestIds) -> {
             boolean removed = requestIds.remove(requestId);
             if (removed) {
@@ -567,7 +563,7 @@ public abstract class AbstractNettyRemotingClient extends AbstractNettyRemoting 
 
             if (requestIds.isEmpty()) {
                 LOGGER.debug("No more requestIds associated with channel {}. Channel removed from mapping.", ch);
-                return null; // 返回 null 表示移除该 Channel 的映射
+                return null;
             }
             return requestIds;
         });
